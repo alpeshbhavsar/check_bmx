@@ -1,0 +1,319 @@
+#!/bin/bash
+#set -ex
+#
+#
+# Usage: ./check_bmx -u <BMX URL> -p <parameter> -w <warn> -c <crit>
+#
+# ## Description:
+#
+# This plugin checks the parameters derived from mod_bmx plugin and compares it with the supplied thresholds.
+#
+# Exit codes
+STATE_OK=0
+STATE_WARNING=1
+STATE_CRITICAL=2
+STATE_UNKNOWN=3
+STATE_DEPENDENT=4
+
+PROGNAME=`/bin/basename $0`
+PROGPATH=`echo $0 | /bin/sed -e 's,[\\/][^\\/][^\\/]*$,,'`
+REVISION="Revision 1.0"
+echo "" > /tmp/mod_bmx_status.txt
+
+
+print_usage() {
+    echo "Usage: $PROGNAME -u <BMXURL> -w <warn> -c <crit> -p <parameter>"
+    echo "Usage: $PROGNAME --help"
+}
+
+print_help() {
+    print_revision $PROGNAME $REVISION
+    echo ""
+    echo "mod_bmx monitor plugin for Nagios"
+    echo ""
+    print_usage
+    echo ""
+}
+
+# Make sure the correct number of command line
+# arguments have been supplied
+
+if [ $# -lt 1 ]; then
+    print_usage
+    exit $STATE_UNKNOWN
+fi
+
+# Grab the command line arguments
+
+thresh_warn=""
+thresh_crit=""
+perfdata=0
+exitstatus=$STATE_WARNING #default
+while test -n "$1"; do
+    case "$1" in
+        --help)
+            print_help
+            exit $STATE_OK
+            ;;
+        -h)
+            print_help
+            exit $STATE_OK
+            ;;
+        --version)
+            print_revision $PROGNAME $VERSION
+            exit $STATE_OK
+            ;;
+        -V)
+            print_revision $PROGNAME $VERSION
+            exit $STATE_OK
+            ;;
+        --bmxurl)
+            URIpath=$2
+            shift
+            ;;
+        -u)
+            URIpath=$2
+            shift
+            ;;
+			
+	-H)
+	    URLHost=$2
+	    shift
+	    ;;
+        --warning)
+            thresh_warn=$2
+            shift
+            ;;
+        -w)
+            thresh_warn=$2
+            shift
+            ;;
+        --critical)
+            thresh_crit=$2
+            shift
+            ;;
+        -c)
+            thresh_crit=$2
+            shift
+            ;;
+        --param)
+            param_=$2
+            shift
+            ;;
+        -p)
+            param_=$2
+            shift
+            ;;
+        -f)
+            perfdata=1
+            ;;
+        -perfdata)
+            perfdata=1
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            print_usage
+            exit $STATE_UNKNOWN
+            ;;
+    esac
+    shift
+done
+
+################check if BMXURL is specified or not
+if [[ $URIpath == "" || $URLHost == "" ]]; then
+    # Control will enter here if $URIpath doesn't exist.
+    echo " Please provide Host of URI using -H option and URI using -u option!"
+    exit 3
+else
+	response=$(/usr/bin/curl --write-out %{http_code} --silent --output /dev/null http://$URLHost$URIpath)
+	if [[ $response != 200 ]]; then
+	echo "URL is not accessible, got response code $response"
+	exit 3
+fi
+fi
+
+
+
+################check if warning and critical deatils are number
+if [[ $thresh_warn = *[^0-9.]* ]]; then
+    
+    echo "Error: '$thresh_warn' is not a number." >&2
+    exit
+fi
+if [[ $thresh_crit = *[^0-9.]* ]]; then
+    echo "Error: '$thresh_crit' is not a number." >&2
+    exit
+fi
+
+
+
+getIdleWorkers() {
+
+/usr/bin/wget -O /tmp/mod_bmx_status.txt http://$URLHost$URIpath
+i=`/bin/cat /tmp/mod_bmx_status.txt | /bin/grep IdleWorkers`
+idlw=`echo "${i//[^0-9]/}"`
+#echo "Total IdleWorkers=$idlw"
+i=$idlw
+
+##### Compare with thresholds
+exitstatus=""
+
+if [ "$thresh_warn" != "" ]; then
+    if (( ${i%%.*} < ${thresh_warn%%.*} || ${i%%.*} == ${thresh_warn%%.*} )) ; then
+        result="warning"
+        exitstatus=$STATE_WARNING
+    fi
+fi
+
+if [ "$thresh_crit" != "" ]; then
+    if (( ${i%%.*} < ${thresh_crit%%.*} || ${i%%.*} == ${thresh_crit%%.*} )) ; then
+        result="critical"
+        exitstatus=$STATE_CRITICAL
+    fi
+fi
+
+if [[ $exitstatus == "" ]] ; then
+	exitstatus=$STATE_OK
+fi
+
+echo "Total IdleWorkers=$i | Total IdleWorkers=$i;${thresh_warn};${thresh_crit}"
+exit $exitstatus
+}
+
+getBusyWorkers() {
+
+/usr/bin/wget -O /tmp/mod_bmx_status.txt http://$URLHost$URIpath
+i=`/bin/cat /tmp/mod_bmx_status.txt | /bin/grep BusyWorkers`
+idlw=`echo "${i//[^0-9]/}"`
+i=$idlw
+
+
+##### Compare with thresholds
+exitstatus=""
+
+if [ "$thresh_warn" != "" ]; then
+    if (( ${i%%.*} > ${thresh_warn%%.*} || ${i%%.*} == ${thresh_warn%%.*} )) ; then
+        result="warning"
+        exitstatus=$STATE_WARNING
+    fi
+fi
+
+if [ "$thresh_crit" != "" ]; then
+    if (( ${i%%.*} > ${thresh_crit%%.*} || ${i%%.*} == ${thresh_crit%%.*} )) ; then
+        result="critical"
+        exitstatus=$STATE_CRITICAL
+    fi
+fi
+
+if [[ $exitstatus == "" ]] ; then
+        exitstatus=$STATE_OK
+fi
+
+echo "Total BusyWorkers=$i | Total BusyWorkers=$i;${thresh_warn};${thresh_crit}"
+
+exit $exitstatus
+}
+
+
+CPULoadPercent() {
+/usr/bin/wget -O /tmp/mod_bmx_status.txt http://$URLHost$URIpath
+
+
+i=`/bin/cat /tmp/mod_bmx_status.txt | /bin/grep CPULoadPercent`
+idlw=`echo "${i//[^0-9.]/}"`
+i=$idlw
+idlw=$idlw"x"
+
+#echo "CPU=$i"
+
+if [ "$idlw" == "x" ]; then
+i="0"
+fi
+
+
+##### Compare with thresholds
+exitstatus=""
+
+if [ "$thresh_warn" != "" ]; then
+    if [ $(echo "$i > $thresh_warn"|/usr/bin/bc) -eq "1" ]; then
+        result="warning"
+        exitstatus=$STATE_WARNING
+    fi
+fi
+
+if [ "$thresh_crit" != "" ]; then
+     if [ $(echo "$i > $thresh_crit"|/usr/bin/bc) -eq "1" ]; then
+        result="critical"
+        exitstatus=$STATE_CRITICAL
+    fi
+fi
+
+if [[ $exitstatus == "" ]] ; then
+        exitstatus=$STATE_OK
+fi
+echo "Apache CPU Usage=$i | Apache CPU Usage=$i;${thresh_warn};${thresh_crit}"
+
+
+exit $exitstatus
+}
+
+ReqPerSec() {
+/usr/bin/wget -O /tmp/mod_bmx_status.txt http://$URLHost$URIpath
+
+
+i=`/bin/cat /tmp/mod_bmx_status.txt | /bin/grep ReqPerSec`
+idlw=`echo "${i//[^0-9.]/}"`
+i=$idlw
+idlw=$idlw"x"
+idlw=$idlw"x"
+
+
+if [ "$idlw" == "x" ]; then
+i="0"
+fi
+
+
+##### Compare with thresholds
+exitstatus=""
+
+if [ "$thresh_warn" != "" ]; then
+    if [ $(echo "$i > $thresh_warn"|/usr/bin/bc) -eq "1" ]; then
+        result="warning"
+        exitstatus=$STATE_WARNING
+    fi
+fi
+
+if [ "$thresh_crit" != "" ]; then
+     if [ $(echo "$i > $thresh_crit"|/usr/bin/bc) -eq "1" ]; then
+        result="critical"
+        exitstatus=$STATE_CRITICAL
+    fi
+fi
+
+if [[ $exitstatus == "" ]] ; then
+        exitstatus=$STATE_OK
+fi
+echo "Requests Per Second=$i | Requests Per Second=$i;${thresh_warn};${thresh_crit}"
+
+exit $exitstatus
+
+
+}
+
+case $param_ in
+        getBusyWorkers)
+                getBusyWorkers ;;
+        ReqPerSec)
+                ReqPerSec ;;
+        CPULoadPercent)
+                CPULoadPercent ;;
+        getIdleWorkers)
+                getIdleWorkers ;;
+        *)
+                echo "Please provide valid Parameter. Ex: getBusyWorkers, ReqPerSec, CPULoadPercent, getIdleWorkers"
+		print_usage
+                exit 3
+esac
+
+
+
